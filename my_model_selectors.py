@@ -6,6 +6,7 @@ import numpy as np
 from hmmlearn.hmm import GaussianHMM
 from sklearn.model_selection import KFold
 from asl_utils import combine_sequences
+from numpy import asarray
 
 
 class ModelSelector(object):
@@ -77,7 +78,28 @@ class SelectorBIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        best_bic_score = float("inf")
+        best_model = None
+
+        for n_component in range(self.min_n_components, self.max_n_components+1):
+            try:
+                model = self.base_model(n_component)
+                # Get the logL (the likelihood of the fitted model)
+                logL = model.score(self.X, self.lengths)
+                # Get the p (number of parameters)
+                p = n_component ** 2 + 2 * n_component * model.n_features - 1
+                # Caculate BIC score
+                bic_score = (-2 * logL) + (p * np.log(self.X.shape[0]))
+
+                if bic_score < best_bic_score:
+                    best_bic_score = bic_score
+                    best_model = model
+
+            except:
+                pass
+
+        return best_model
+
 
 
 class SelectorDIC(ModelSelector):
@@ -94,8 +116,37 @@ class SelectorDIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        best_dic_score = float("-inf")
+        best_model = None
 
+        # The aginst words
+        aginst_words = [word for word in self.words if word != self.this_word]
+
+        for n_component in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                model = self.base_model(n_component)
+                # Get the logL (the likelihood of the fitted model)
+                logL = model.score(self.X, self.lengths)
+                sum_other_logL = 0.0
+
+                for word in aginst_words:
+                    # X, lengths of this word
+                    other_x, other_lengths = self.hwords[word]
+                    # sum of other score
+                    sum_other_logL += model.score(other_x, other_lengths)
+
+                # Calculate DIC Score
+                dic_score = logL - sum_other_logL / (len(self.words)-1)
+
+                if dic_score > best_dic_score:
+                    best_dic_score = dic_score
+                    best_model = model
+
+            except:
+                pass
+
+        return best_model       
+                 
 
 class SelectorCV(ModelSelector):
     ''' select best model based on average log Likelihood of cross-validation folds
@@ -106,4 +157,49 @@ class SelectorCV(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection using CV
-        raise NotImplementedError
+        best_score = float("-inf")
+        best_model = None
+
+
+        for n_component in range(self.min_n_components, self.max_n_components + 1):
+            
+            score = 0
+            iter_num = 0
+            last_model = None
+
+            try:
+                # Sequence can't be fold
+                if len(self.sequences) <= 1:
+                    last_model = GaussianHMM(n_components=n_component, covariance_type="diag", n_iter=1000,
+                                        random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
+                    score = model.score(self.X, self.lengths)
+                else:
+                    # Sequence can be fold
+                    # Save 'KFold' as variable
+                    num_splits = min(len(self.sequences),3)
+                    split_method = KFold(num_splits)
+
+                    for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                        # Get the train and test set
+                        X_train, length_train = combine_sequences(cv_train_idx, self.sequences)
+                        X_test, length_test = combine_sequences(cv_test_idx, self.sequences)
+                        # Fit model with train data
+                        model = GaussianHMM(n_components=n_component, covariance_type="diag", n_iter=1000,
+                                        random_state=self.random_state, verbose=False).fit(X_train, length_train)
+                        score += model.score(X_test,length_test)
+                        iter_num += 1
+                    # Caculate mean score
+                    score = score / iter_num
+
+                # Keep best score and best model
+                if best_score < score:
+                    best_score = score
+                    if last_model is None:
+                        last_model = GaussianHMM(n_components=n_component, covariance_type="diag", n_iter=1000,
+                                       random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
+                    best_model = last_model
+
+            except:
+                pass
+
+        return best_model
